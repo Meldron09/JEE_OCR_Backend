@@ -23,9 +23,8 @@ cd fastapi-s3-upload && uvicorn main:app --reload
 
 The application lives in `fastapi-s3-upload/`:
 
-- **main.py** - FastAPI application with three endpoints:
-  - `POST /generate-presigned-url` - Generates a presigned S3 URL for direct client upload, creates a DynamoDB task entry with status "PENDING"
-  - `POST /upload-to-s3` - Alternative endpoint for direct file upload via presigned URL
+- **main.py** - FastAPI application with two endpoints:
+  - `POST /upload-file` - Accepts a multipart file upload, stores it in S3 under `input/`, and creates a DynamoDB task entry with status "PENDING"
   - `GET /get-processing-status?task_id=X` - Returns task status from DynamoDB; when "COMPLETED", lists all output files with presigned download URLs
 
 - **config.py** - Loads AWS credentials and configuration from environment variables via `python-dotenv`
