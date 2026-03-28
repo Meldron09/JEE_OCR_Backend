@@ -1,113 +1,115 @@
-# JEE OCR Backend
+# JEE OCR Processing Service
 
-A FastAPI-based OCR processing service for JEE (Joint Entrance Examination) that handles file uploads to AWS S3 and tracks processing status in DynamoDB.
+FastAPI-based OCR processing service for JEE (Joint Entrance Examination) that handles file uploads to AWS S3 and tracks processing status in DynamoDB.
 
-## Prerequisites
+## Architecture
 
-- Python 3.8+
-- AWS account with S3 and DynamoDB access
-- AWS credentials with appropriate permissions
-
-## Installation
-
-1. Clone the repository
-2. Create a virtual environment:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r fastapi-s3-upload/requirements.txt
-   ```
-4. Configure environment variables (see below)
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in your AWS credentials:
-
-```bash
-cp fastapi-s3-upload/.env.example fastapi-s3-upload/.env
+```
+Client → FastAPI → S3 (input/) → External OCR Processor → S3 (output/)
+                → DynamoDB (status tracking) ← External OCR Processor
 ```
 
-Then edit `.env` with your actual AWS credentials.
+### Workflow
 
-## Running the Server
-
-```bash
-cd fastapi-s3-upload
-uvicorn main:app --reload
-```
-
-The API will be available at http://localhost:8000
-
-API documentation is available at http://localhost:8000/docs
+1. **Upload File** (`POST /upload-file`): Client uploads a file, which is stored in S3 under `input/`. A task entry is created in DynamoDB with status `PENDING`.
+2. **External OCR Processor**: Reads files from S3 `input/`, processes them, writes results to `output/{task_id}/`, and updates DynamoDB status to `COMPLETED`.
+3. **Get Status** (`GET /get-processing-status`): Returns current task status and, when completed, lists all output files with presigned download URLs.
 
 ## API Endpoints
 
-### POST /generate-presigned-url
+### `POST /upload-file`
 
-Generates a presigned S3 URL for direct client upload. Creates a DynamoDB task entry with status "PENDING".
+Upload a file for OCR processing.
 
-**Request Body:**
-```json
-{
-  "file_name": "example.pdf",
-  "content_type": "application/pdf",
-  "output_prefix": "results/user123/"
-}
-```
+**Request:**
+- Content-Type: `multipart/form-data`
+- Body: `file` (binary file data)
 
 **Response:**
 ```json
 {
-  "task_id": "uuid-string",
-  "presigned_url": "https://bucket.s3.amazonaws.com/...",
-  "s3_key": "input/uuid-string/example.pdf"
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "File uploaded successfully"
 }
 ```
 
-### POST /upload-to-s3
+### `GET /get-processing-status`
 
-Alternative endpoint for direct file upload via presigned URL.
+Check the processing status of a task.
 
-**Request Body:**
+**Query Parameters:**
+- `task_id` (required): The UUID returned from the upload endpoint
+
+**Response (Pending):**
 ```json
 {
-  "file_name": "example.pdf",
-  "content_type": "application/pdf",
-  "file_content": "base64-encoded-content",
-  "output_prefix": "results/user123/"
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "PENDING"
 }
 ```
 
-### GET /get-processing-status?task_id=X
-
-Returns task status from DynamoDB.
-
-**Response:**
+**Response (Completed):**
 ```json
 {
-  "task_id": "uuid-string",
-  "status": "PENDING|COMPLETED|FAILED",
-  "input_s3_key": "input/uuid-string/example.pdf",
-  "output_s3_key": "results/user123/output.pdf",
-  "output_urls": ["https://..."]  // Only when COMPLETED
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "COMPLETED",
+  "output_folder": "output/550e8400-e29b-41d4-a716-446655440000/",
+  "files": [
+    {
+      "file_name": "result.json",
+      "relative_path": "result.json",
+      "s3_key": "output/550e8400-e29b-41d4-a716-446655440000/result.json",
+      "download_url": "https://s3.ap-south-1.amazonaws.com/...",
+      "size_bytes": 1234
+    }
+  ],
+  "total_files": 1
 }
 ```
 
-## Environment Variables
+## Setup
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `AWS_DEFAULT_REGION` | AWS region | `ap-south-1` |
-| `S3_BUCKET` | S3 bucket name | `jee-ocr-bucket` |
-| `AWS_ACCESS_KEY_ID` | AWS access key | `AKIA...` |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key | `your-secret-key` |
-| `DYNAMODB_TABLE` | DynamoDB table name | `FileTasks` |
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configure Environment
+
+Create a `.env` file in the `fastapi-s3-upload/` directory:
+
+```env
+AWS_DEFAULT_REGION=ap-south-1
+S3_BUCKET=your-bucket-name
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+DYNAMODB_TABLE=your-table-name
+```
+
+### 3. Run the Server
+
+```bash
+uvicorn main:app --reload
+```
+
+The API runs on `http://localhost:8000`. API documentation is available at `http://localhost:8000/docs`.
 
 ## AWS Infrastructure
 
-- **S3 Bucket**: Files are uploaded to `input/` prefix; OCR results stored in user-specified output prefixes
-- **DynamoDB Table**: Tracks task_id, status (PENDING/COMPLETED), input_s3_key, and output_s3_key
-- **Region**: ap-south-1 (Mumbai)
+| Component | Details |
+|-----------|---------|
+| S3 Bucket | Files uploaded to `input/` prefix; OCR results stored in `output/{task_id}/` |
+| DynamoDB Table | Tracks `task_id`, `status` (PENDING/COMPLETED), `input_s3_key`, `output_s3_key` |
+| Region | ap-south-1 (Mumbai) |
+
+## Project Structure
+
+```
+fastapi-s3-upload/
+├── main.py          # FastAPI application with endpoints
+├── config.py        # AWS configuration from environment variables
+├── requirements.txt # Python dependencies
+├── .env.example     # Example environment variables
+└── README.md        # This file
+```

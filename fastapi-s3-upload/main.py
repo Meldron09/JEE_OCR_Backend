@@ -27,62 +27,35 @@ class PresignedUrlRequest(BaseModel):
     file_name: str
     content_type: str
 
-
 # -----------------------------
-# 1️⃣ Generate Presigned URL
+# 1️⃣ Upload File
 # -----------------------------
-@app.post("/generate-presigned-url")
-def generate_presigned_url(payload: PresignedUrlRequest):
-
+@app.post("/upload-file")
+async def upload_file(
+    file: UploadFile = File(...)
+):
     try:
-        task_id=str(uuid.uuid4())
-        unique_file_name = f"{task_id}_{payload.file_name}"
+        task_id = str(uuid.uuid4())
+        unique_file_name = f"{task_id}_{file.filename}"
         object_key = f"{UPLOAD_FOLDER}/{unique_file_name}"
 
+        # Generate presigned URL
         presigned_url = s3_client.generate_presigned_url(
             ClientMethod="put_object",
             Params={
                 "Bucket": S3_BUCKET,
                 "Key": object_key,
-                "ContentType": payload.content_type
+                "ContentType": file.content_type
             },
             ExpiresIn=PRESIGNED_URL_EXPIRATION
         )
-        # Create DynamoDB entry
-        table.put_item(
-            Item={
-                "task_id": task_id,
-                "status": "PENDING",
-                "input_s3_key": object_key
-            }
-        )
-        return {
-            "task_id": task_id,
-            "upload_url": presigned_url
-        }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# -----------------------------
-# 2️⃣ Upload File Using Presigned URL
-# -----------------------------
-@app.post("/upload-to-s3")
-async def upload_to_s3(
-    presigned_url: str = Form(...),
-    file: UploadFile = File(...)
-):
-
-    try:
+        # Upload file to S3 via presigned URL
         file_content = await file.read()
-
         response = requests.put(
             presigned_url,
             data=file_content,
-            headers={
-                "Content-Type": file.content_type
-            }
+            headers={"Content-Type": file.content_type}
         )
 
         if response.status_code != 200:
@@ -91,14 +64,24 @@ async def upload_to_s3(
                 detail="Upload to S3 failed"
             )
 
+        # Create DynamoDB entry
+        table.put_item(
+            Item={
+                "task_id": task_id,
+                "status": "PENDING",
+                "input_s3_key": object_key
+            }
+        )
+
         return {
-            "message": "File uploaded successfully",
-            "file_name": file.filename
+            "task_id": task_id,
+            "message": "File uploaded successfully"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # -----------------------------
 # 3️⃣ Get Processing Status
